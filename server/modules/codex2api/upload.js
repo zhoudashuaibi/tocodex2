@@ -203,6 +203,7 @@ export function createUploader({ db, crypto, client, getConfig, settingsGet, dat
           refreshToken: item.tokens.refresh_token,
           sessionToken: item.tokens.session_token || null,
           skipRefresh: options.skip_refresh !== false,
+          email: item.email,
           logger,
         });
         await applyAccountConfig(replacement.remoteId, item, options);
@@ -215,6 +216,7 @@ export function createUploader({ db, crypto, client, getConfig, settingsGet, dat
           mode: 'replace',
           remote_id: replacement.remoteId,
           old_remote_id: item.remoteId,
+          ...(replacement.deduplicated ? { deduplicated: true, note: 'RT 已与远端一致（查重跳过），未重建实体' } : {}),
         });
       } catch (error) {
         failed.push({ id: item.row.id, email: item.email, error: String(error.message || error).slice(0, 400) });
@@ -356,9 +358,15 @@ export function createUploader({ db, crypto, client, getConfig, settingsGet, dat
  * 反过来先把旧号删了、创建再失败，号就没了。旧号删除失败只告警——新号已建好，
  * 留着旧号顶多是同邮箱双份，下一轮同步会报 duplicates 提醒人工清理。
  *
- * @returns {Promise<{remoteId: number}>} 新远端账号 ID
+ * 创建未返回新 id 的兜底：codex2api 按 RT 原文查重会跳过创建——这条 RT 已经在
+ * 远端某实体上（典型场景：重授成功时 pushRepairedCredentials 已回推，随后手动
+ * 上传再推同一条 RT）。按 email 回找：命中目标实体本身 → 远端已持有当前凭据，
+ * 视为成功不重建（deduplicated）；命中别的实体 → 同邮箱多份、无法确认 RT 归属，
+ * 报错留人工处理，绝不盲删。
+ *
+ * @returns {Promise<{remoteId: number, deduplicated?: boolean}>} 新远端账号 ID
  */
-export async function replaceAccountCredentials(client, { remoteId, name, proxyUrl, groupIds, refreshToken, sessionToken = null, skipRefresh = true, logger = null }) {
+export async function replaceAccountCredentials(client, { remoteId, name, proxyUrl, groupIds, refreshToken, sessionToken = null, skipRefresh = true, email = null, logger = null }) {
   const payload = {
     // 远端历史遗留的 oauth--- 名字必须先归一：codex2api 现在拒绝含 `--` 的名称
     name: sanitizeAccountName(name) || 'oauth::account',
@@ -372,15 +380,31 @@ export async function replaceAccountCredentials(client, { remoteId, name, proxyU
   const result = await client.createAccount(payload);
   const createdIds = Array.isArray(result?.created_ids) ? result.created_ids.map(Number) : [];
   const newId = createdIds.find((id) => Number.isSafeInteger(id) && id > 0);
-  if (!Number.isSafeInteger(newId)) {
-    throw new Error('codex2api 未返回新账号 ID（创建未生效，旧账号保持原样）');
+  if (Number.isSafeInteger(newId)) {
+    try {
+      await client.deleteAccount(remoteId);
+    } catch (error) {
+      logger?.warn?.({ remoteId, newId, err: error.message }, '旧远端账号删除失败，暂留双份待清理');
+    }
+    return { remoteId: newId };
   }
-  try {
-    await client.deleteAccount(remoteId);
-  } catch (error) {
-    logger?.warn?.({ remoteId, newId, err: error.message }, '旧远端账号删除失败，暂留双份待清理');
+  let revived = null;
+  if (email && typeof client.findAccountByEmail === 'function') {
+    try {
+      revived = await client.findAccountByEmail(email);
+    } catch {}
   }
-  return { remoteId: newId };
+  const revivedId = Number(revived?.id);
+  if (Number.isSafeInteger(revivedId) && revivedId > 0) {
+    if (revivedId === remoteId) {
+      logger?.info?.({ remoteId, email }, 'RT 已存在于目标远端账号（查重跳过），无需替换');
+      return { remoteId: revivedId, deduplicated: true };
+    }
+    throw new Error(
+      `codex2api 按 RT 查重跳过创建，且 ${email} 在远端存在多份实体（命中 #${revivedId}，目标 #${remoteId}），请先清理重复实体后重试`,
+    );
+  }
+  throw new Error('codex2api 未返回新账号 ID（创建未生效，旧账号保持原样）');
 }
 
 export function buildExportFromTokens(row, tokens) {

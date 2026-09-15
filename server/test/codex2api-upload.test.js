@@ -190,6 +190,52 @@ test('并发上传串行执行：同一个号只创建一次，后到的那次�
   assert.deepEqual(events.map((e) => e.type), ['uploaded_codex2api', 'codex2api_replaced']);
 });
 
+test('替换凭据命中 RT 查重：远端已持有当前凭据 → 不报错不重建，按已替换回填', async () => {
+  const id = insertAccount(ctx.db, ctx.crypto, { email: 'dup@test.local', balance: 20 });
+  await ctx.uploader.uploadAccounts([id], {}); // 首次上传：创建远端实体
+  const remoteId = ctx.remote.get('dup@test.local').id;
+
+  // 模拟重授后凭据已被自动回推（pushRepairedCredentials），随后手动再传同一条 RT：
+  // codex2api 服务端按 RT 原文查重跳过创建，响应不含 created_ids
+  ctx.client.createAccount = async (payload) => {
+    ctx.created.push(payload);
+    return { success: 0, updated: 0, duplicate: 1, failed: 0, created_ids: [] };
+  };
+  ctx.client.findAccountByEmail = async (email) => ctx.remote.get(email) ?? null;
+
+  const result = await ctx.uploader.uploadAccounts([id], {});
+
+  assert.equal(result.failed.length, 0, '查重跳过不算失败：远端已是当前凭据');
+  assert.equal(result.updated, 1);
+  assert.equal(ctx.deleted.length, 0, '目标实体已持有当前 RT，不应删除');
+  assert.equal(
+    ctx.db.prepare('SELECT codex2api_account_id FROM accounts WHERE id=?').get(id).codex2api_account_id,
+    remoteId,
+  );
+  const event = ctx.db.prepare('SELECT detail FROM account_events WHERE account_id=? ORDER BY id DESC LIMIT 1').get(id);
+  assert.match(event.detail, /查重跳过/);
+});
+
+test('替换凭据命中 RT 查重但同邮箱多份实体：报错留人工处理，不盲删', async () => {
+  const id = insertAccount(ctx.db, ctx.crypto, { email: 'multi@test.local', balance: 20 });
+  // 远端同邮箱两份：emailIndex 取小 id（100）为替换目标，按邮箱回找命中另一份（200）
+  ctx.client.listAllAccounts = async () => [
+    { id: 100, email: 'multi@test.local', status: 'active', name: 'oauth::multi@test.local::20' },
+    { id: 200, email: 'multi@test.local', status: 'active', name: 'oauth::multi@test.local::20' },
+  ];
+  ctx.client.createAccount = async (payload) => {
+    ctx.created.push(payload);
+    return { success: 0, updated: 0, duplicate: 1, failed: 0, created_ids: [] };
+  };
+  ctx.client.findAccountByEmail = async () => ({ id: 200, email: 'multi@test.local' });
+
+  const result = await ctx.uploader.uploadAccounts([id], {});
+
+  assert.equal(result.failed.length, 1);
+  assert.match(result.failed[0].error, /多份实体/);
+  assert.equal(ctx.deleted.length, 0, 'RT 归属不明时不删除任何实体');
+});
+
 test('创建前二次校验：快照之后远端已出现的号降级为替换，不再重复创建', async () => {
   const id = insertAccount(ctx.db, ctx.crypto, { email: 'stale@test.local', balance: 20 });
   // 第一次拉取是空的（=陈旧快照），之后远端已经有这个号（=别处并发建好了）

@@ -12,7 +12,8 @@ import { replaceAccountCredentials } from './upload.js';
  *  - 拉全量监控分组账号 → error/unauthorized 账号分类（banned/rate_limit/临时错误）
  *  - OAuth 号限流不写 status=error，用 rate_limited_at 判定：重置时间超过阈值 → 移废弃池，否则保留观察
  *  - 401/会话过期 → 自动修复：有 refresh_token 先刷新（失败自动转完整登录），没有直接发完整登录；
- *    连续失败 max_repair_attempts 次暂停保留待重授（needs_reauth + 停自动修复 + 暂停远端调度，不再废弃）
+ *    裸 unauthorized（上游 401 镜像，无封禁文本）同此路径；连续失败 max_repair_attempts 次暂停保留
+ *    待重授（needs_reauth + 停自动修复 + 暂停远端调度，不再废弃）
  *  - 修复结果回执：发起修复只写「已发起」，任务终态由 noteRepairOutcome 写回同一行明细
  *    （outcome=ok/failed/parked/followup），日志必须能回答「修好了还是修废了」
  *  - 摘要里两种量必须分清（前端 chip 也按此标注，避免误读）：
@@ -352,19 +353,19 @@ export function createMonitor({ db, crypto, client, getConfig, pools, engine, up
           continue;
         }
 
-        // codex2api 的 unauthorized（healthTier=banned）≈ 上游判定封禁，与 error 同级处理；
-        // 其余非 error 状态（active/cooldown/quota_paused 等）不进分类
+        // error 与 unauthorized 进分类，其余状态（active/cooldown/quota_paused 等）不处理。
+        // unauthorized 只是上游 401 的镜像，分不清「RT 失效/被轮换」与「真封禁」：裸
+        // unauthorized 视同会话过期走自动修复（修不好自然熔断待重授），只有错误文本
+        // 带封禁特征（banned_patterns / 永久封禁正则命中）才进邮箱辅证分支
         const unauthorized = String(remote.status || '') === 'unauthorized';
         if (String(remote.status || '') !== 'error' && !unauthorized) continue;
         const errorMessage = client.accountErrorMessage(remote) || (unauthorized ? 'unauthorized' : 'unknown error');
 
         const bannedHit = bannedPatterns.some((re) => re.test(errorMessage));
         const permanentHit = PERMANENT_PATTERN.test(errorMessage);
-        if (bannedHit || permanentHit || unauthorized) {
+        if (bannedHit || permanentHit) {
           // 封禁必须叠加邮箱辅证：未证实前不废弃，只暂停远端调度保留观察
-          const source = unauthorized && !bannedHit && !permanentHit
-            ? 'monitor_unauthorized_status'
-            : bannedHit ? 'monitor_banned_pattern' : 'monitor_permanent_pattern';
+          const source = bannedHit ? 'monitor_banned_pattern' : 'monitor_permanent_pattern';
           const verdict = await confirmBanByMail(local, source);
           if (verdict.confirmed) {
             db.prepare('UPDATE accounts SET auto_repair_blocked=1, updated_at=? WHERE id=?').run(
@@ -388,7 +389,7 @@ export function createMonitor({ db, crypto, client, getConfig, pools, engine, up
               email,
               remote_id: remote?.id,
               action: 'ban_unconfirmed',
-              reason: unauthorized && !bannedHit && !permanentHit ? 'unauthorized_status' : bannedHit ? 'banned_pattern' : 'permanent_pattern',
+              reason: bannedHit ? 'banned_pattern' : 'permanent_pattern',
               detail: `${errorMessage}（邮件辅证 ${verdict.result}，不废弃，保留观察）`,
             });
           }
@@ -408,7 +409,8 @@ export function createMonitor({ db, crypto, client, getConfig, pools, engine, up
           continue;
         }
 
-        // 临时错误 → 自动重登修复（发起只写「已发起」，终态由 noteRepairOutcome 回执到本行）
+        // 临时错误 / 裸 unauthorized（会话过期）→ 自动重登修复
+        // （发起只写「已发起」，终态由 noteRepairOutcome 回执到本行）
         const repair = await tryAutoRepair(local, monitor, remote);
         if (repair.ok) {
           result.repairing += 1;
@@ -601,9 +603,11 @@ export function createMonitor({ db, crypto, client, getConfig, pools, engine, up
     if (monitor.auto_repair === false) return { ok: false, code: 'auto_repair_off' };
     if (local.auto_repair_blocked) return { ok: false, code: 'blocked' };
     if (local.pool !== 'main') return { ok: false, code: 'ineligible' };
-    // 收编保险门：远端健康的收编号绝不自动登录（自动修复本就只对 error 号触发，双保险）；
-    // 远端 error（如 token 撤销 401）时收编号照常修复——无本地 tokens 直接走完整登录
-    if (local.adopted_remote && remote && String(remote.status || '') !== 'error') return { ok: false, code: 'ineligible' };
+    // 收编保险门：远端健康的收编号绝不自动登录（自动修复本就只对 error/unauthorized 号触发，双保险）；
+    // 远端 error/unauthorized（如 token 撤销 401）时收编号照常修复——无本地 tokens 直接走完整登录
+    if (local.adopted_remote && remote && !['error', 'unauthorized'].includes(String(remote.status || ''))) {
+      return { ok: false, code: 'ineligible' };
+    }
     const active = db
       .prepare(`SELECT type, status, stage FROM jobs WHERE account_id=? AND status IN ('queued','running','awaiting_input')`)
       .get(local.id);
@@ -1006,6 +1010,7 @@ export function createMonitor({ db, crypto, client, getConfig, pools, engine, up
       refreshToken: tokens.refresh_token,
       sessionToken: tokens.session_token || null,
       skipRefresh: true,
+      email: row.email,
       logger,
     });
     db.prepare('UPDATE accounts SET codex2api_account_id=?, updated_at=? WHERE id=?').run(

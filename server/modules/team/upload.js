@@ -214,6 +214,7 @@ export function createTeamUploader({ db, crypto, client, getCodex2apiConfig, get
           refreshToken: send.refresh_token,
           sessionToken: send.session_token || null,
           skipRefresh: options.skip_refresh !== false,
+          email: item.email,
           logger,
         });
         await applyAccountConfig(replacement.remoteId, options, score_bias);

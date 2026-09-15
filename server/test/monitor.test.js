@@ -297,6 +297,54 @@ test('封禁关键词未获邮件辅证 → 不废弃，暂停远端保留观察
   assert.equal(account.auto_repair_blocked, 0);
 });
 
+test('裸 unauthorized（上游 401 镜像）视同会话过期：走自动修复，不再卡待辅证', async () => {
+  insertAccount(ctx.db, ctx.crypto, { email: 'expired@test.local', tokens: { refresh_token: 'rt' } });
+  const monitor = buildMonitor({
+    autoRepair: true,
+    remoteAccounts: [remoteAccount({ id: 3, email: 'expired@test.local', status: 'unauthorized' })],
+  });
+
+  const view = await monitor.runCheck();
+
+  assert.equal(view.last_result.ban_unconfirmed, 0);
+  assert.equal(view.last_result.repairing, 1);
+  assert.equal(ctx.submitted.length, 1);
+  assert.equal(ctx.submitted[0].type, 'refresh');
+  assert.deepEqual(ctx.schedulable, [], '会话过期不再暂停远端调度');
+  const [item] = monitor.recentLogs(1)[0].items;
+  assert.equal(item.action, 'repairing');
+  const account = ctx.db.prepare(`SELECT pool, status, banned FROM accounts WHERE email='expired@test.local'`).get();
+  assert.equal(account.pool, 'main');
+  assert.equal(account.status, 'authorizing');
+  assert.equal(account.banned, 0);
+});
+
+test('unauthorized + 错误文本带封禁特征：仍走邮箱辅证（未证实保留观察）', async () => {
+  insertAccount(ctx.db, ctx.crypto, { email: 'suspect@test.local' });
+  const monitor = buildMonitor({
+    autoRepair: true,
+    bannedPatterns: ['banned'],
+    banMailCheck: {
+      check: async () => ({ confirmed: false, result: 'not_found' }),
+    },
+    remoteAccounts: [
+      {
+        id: 4,
+        status: 'unauthorized',
+        name: 'oauth::suspect@test.local',
+        email: 'suspect@test.local',
+        error_message: 'account is banned',
+      },
+    ],
+  });
+
+  const view = await monitor.runCheck();
+
+  assert.equal(view.last_result.ban_unconfirmed, 1);
+  assert.equal(view.last_result.repairing, 0);
+  assert.deepEqual(ctx.schedulable, [{ id: 4, enabled: false }]);
+});
+
 test('封禁关键词 + 邮件辅证证实 → 移废弃池并阻断自动修复', async () => {
   insertAccount(ctx.db, ctx.crypto, { email: 'banned@test.local' });
   const monitor = buildMonitor({
