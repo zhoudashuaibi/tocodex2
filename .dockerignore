@@ -1,0 +1,9 @@
+node_modules
+server/web-dist
+data
+tmp
+gui-test-screenshots
+docs
+.git
+*.log
+.env

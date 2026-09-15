@@ -1,0 +1,223 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: #fafafa;
+  --foreground: #09090b;
+  --card: #ffffff;
+  --card-foreground: #09090b;
+  --popover: #ffffff;
+  --popover-foreground: #09090b;
+  --primary: #18181b;
+  --primary-foreground: #fafafa;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
+  --destructive: #b91c1c;
+  --destructive-foreground: #ffffff;
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #18181b;
+  --success: #15803d;
+  --warning: #b45309;
+  --info: #2563eb;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #09090b;
+  --sidebar-accent: #f4f4f5;
+  --sidebar-border: #e4e4e7;
+  --surface-raised: #ffffff;
+  --overlay: rgb(9 9 11 / 0.55);
+  /* 层次感：浅色主题用真实阴影区分「页面底色 / 卡片 / 浮层」 */
+  --elevation-1: 0 1px 2px rgb(9 9 11 / 0.05);
+  --elevation-2: 0 2px 4px -1px rgb(9 9 11 / 0.06), 0 4px 12px -2px rgb(9 9 11 / 0.08);
+  --elevation-3: 0 8px 24px -6px rgb(9 9 11 / 0.16), 0 2px 6px -2px rgb(9 9 11 / 0.1);
+  --shadow-surface: var(--elevation-1);
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #131316;
+  --card-foreground: #fafafa;
+  --popover: #18181b;
+  --popover-foreground: #fafafa;
+  --primary: #fafafa;
+  --primary-foreground: #18181b;
+  --secondary: #27272a;
+  --secondary-foreground: #fafafa;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --accent: #27272a;
+  --accent-foreground: #fafafa;
+  --destructive: #f87171;
+  --destructive-foreground: #450a0a;
+  --border: #2a2a30;
+  --input: #2a2a30;
+  --ring: #d4d4d8;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --info: #60a5fa;
+  --sidebar: #0d0d10;
+  --sidebar-foreground: #fafafa;
+  --sidebar-accent: #1c1c21;
+  --sidebar-border: #232329;
+  --surface-raised: #131316;
+  --overlay: rgb(0 0 0 / 0.7);
+  /* 深色下阴影几乎不可见，改用边框与内高光建立层次 */
+  --elevation-1: inset 0 1px 0 rgb(255 255 255 / 0.03);
+  --elevation-2: 0 4px 16px -4px rgb(0 0 0 / 0.5);
+  --elevation-3: 0 12px 32px -8px rgb(0 0 0 / 0.7);
+  --shadow-surface: var(--elevation-1);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-overlay: var(--overlay);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  min-width: 320px;
+  background: var(--background);
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+::selection {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.app-shell {
+  isolation: isolate;
+}
+
+/* 侧栏与页面底色需要可辨识的差异，否则「内容区」没有边界感 */
+.app-sidebar {
+  background: var(--sidebar);
+  border-right: 1px solid var(--sidebar-border);
+  box-shadow: none;
+}
+
+.app-header {
+  background: var(--surface-raised);
+  backdrop-filter: none;
+}
+
+.app-header-inner {
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-surface);
+}
+
+.app-main {
+  scrollbar-gutter: stable;
+}
+
+.app-surface {
+  box-shadow: var(--shadow-surface);
+}
+
+.table-shell {
+  box-shadow: var(--shadow-surface);
+}
+
+/* 表头吸顶：长列表在 lg 断点由 main 容器滚动，表头跟随 */
+.table-shell thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card);
+}
+
+/* 数值列对齐：余额/用量/耗时/计数用等宽数字，避免逐行抖动 */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.font-mono,
+pre,
+code,
+kbd {
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+/* 日志查看器：ANSI 着色（子进程输出常带转义序列） */
+.log-ansi-bold { font-weight: 600; }
+.log-ansi-dim { opacity: 0.6; }
+.log-ansi-red { color: #f87171; }
+.log-ansi-green { color: #4ade80; }
+.log-ansi-yellow { color: #fbbf24; }
+.log-ansi-blue { color: #60a5fa; }
+.log-ansi-magenta { color: #e879f9; }
+.log-ansi-cyan { color: #22d3ee; }
+.log-hit { background: var(--warning); color: var(--foreground); border-radius: 2px; }
+.log-hit-active { background: var(--primary); color: var(--primary-foreground); border-radius: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

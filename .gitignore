@@ -1,0 +1,23 @@
+node_modules
+server/web-dist
+# 必须写成 /data：不带斜杠的 data 会匹配任意层级的同名路径段，
+# 从而把 web/src/components/data/ 这类源码目录一起忽略掉
+/data
+data-backup-*
+tmp
+*.log
+gui-test-screenshots
+.env
+.DS_Store
+*.tsbuildinfo
+.zcode
+.agents
+.playwright-mcp
+example.json
+# 临时实验用的单文件 HTML 页面（截图/调样式），不属于项目源码
+pelican-bicycle.html
+# Python 运行时缓存：core/cloudflare-ctf 的动态 Sentinel / CF 求解器会生成
+__pycache__/
+*.pyc
+# 控制台截图包含真实账号邮箱，仅保留在本地，不得入库
+docs/console.png

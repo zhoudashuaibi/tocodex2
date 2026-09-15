@@ -1,0 +1,25 @@
+{
+  "name": "@tocodex2/server",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "toCodex2 v2 后端：Fastify + better-sqlite3",
+  "scripts": {
+    "dev": "node index.js",
+    "start": "node index.js",
+    "check": "node --check index.js && node --check core/protocol-login.mjs && node --check core/tls-transport.mjs && node --check core/sentinel.mjs && node --check core/outlook-mail.mjs && node --check core/chatgpt-credits.mjs && node --check core/mail-otp.mjs && node --check core/sms-providers.mjs && node --check core/risk-control.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@fastify/compress": "^9.2.0",
+    "@fastify/static": "^8.0.3",
+    "better-sqlite3": "^11.8.1",
+    "fastify": "^5.2.1",
+    "fastify-plugin": "^6.0.0",
+    "jsdom": "^26.1.0",
+    "pino": "^9.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

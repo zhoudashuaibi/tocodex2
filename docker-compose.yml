@@ -1,0 +1,15 @@
+services:
+  tocodex2:
+    build: .
+    # 服务器部署可直接用 CI 构建好的镜像（GitHub Actions 自动推送到 GHCR）：
+    # image: ghcr.io/zhoudashuaibi/tocodex2:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:2026:2026"       # 只绑本机，由反代转发；确需直连再改 0.0.0.0
+    volumes:
+      - ./data:/app/data
+    environment:
+      TOCODEX2_CONSOLE_PASSWORD: ${TOCODEX2_CONSOLE_PASSWORD:-}   # 首次种子，可留空走首访引导
+      TOCODEX2_SECRET_KEY: ${TOCODEX2_SECRET_KEY:-}               # 建议显式提供
+      TOCODEX2_PORT: "2026"
+    mem_limit: 1g

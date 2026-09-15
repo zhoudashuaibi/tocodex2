@@ -1,0 +1,24 @@
+{
+  "name": "tocodex2",
+  "version": "2.0.0",
+  "private": true,
+  "description": "toCodex2 v2 —— ChatGPT 账号池管理系统（模块化重写版）",
+  "type": "module",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "npm --workspace server run dev",
+    "dev:web": "npm --workspace web run dev",
+    "build": "npm --workspace web run build",
+    "start": "node server/index.js",
+    "check": "npm --workspace server run check && npm --workspace web run check",
+    "test": "npm --workspace server run test",
+    "dedupe-remote": "node scripts/dedupe-remote-accounts.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
