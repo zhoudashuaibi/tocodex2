@@ -161,7 +161,6 @@ export function Codex2ApiPage() {
   const [initialBalanceTarget, setInitialBalanceTarget] = useState('0');
   const [balanceRefreshInterval, setBalanceRefreshInterval] = useState('60');
   const [cooldownMin, setCooldownMin] = useState('5');
-  const [rateLimitThreshold, setRateLimitThreshold] = useState('12');
   const [bannedPatterns, setBannedPatterns] = useState('');
   const [rateLimitPatterns, setRateLimitPatterns] = useState('');
 
@@ -183,7 +182,6 @@ export function Codex2ApiPage() {
       setInitialBalanceTarget(String(m.initial_balance_target ?? 0));
       setBalanceRefreshInterval(String(m.balance_refresh_interval_minutes ?? 60));
       setCooldownMin(String(m.cooldown_minutes ?? 5));
-      setRateLimitThreshold(String(m.rate_limit_reset_threshold_hours ?? 12));
       setBannedPatterns((m.banned_patterns ?? []).join('\n'));
       setRateLimitPatterns((m.rate_limit_patterns ?? []).join('\n'));
     }
@@ -206,7 +204,6 @@ export function Codex2ApiPage() {
     replenish_upload_order: replenishUploadOrder,
     replenish_join_order: replenishJoinOrder,
     pause_on_discard: true,
-    rate_limit_reset_threshold_hours: Number(rateLimitThreshold) || 12,
     banned_patterns: bannedPatterns.split('\n').map((s) => s.trim()).filter(Boolean),
     rate_limit_patterns: rateLimitPatterns.split('\n').map((s) => s.trim()).filter(Boolean),
   };
@@ -453,17 +450,14 @@ export function Codex2ApiPage() {
                 placeholder="沿用 codex2api 保底"
               />
             </div>
-            <div className="space-y-1.5">
-              <Label>限流废弃阈值（小时）</Label>
-              <Input value={rateLimitThreshold} onChange={(e) => setRateLimitThreshold(e.target.value)} />
-            </div>
           </div>
           <p className="text-xs text-muted-foreground">
             codex2api 保底管在架水位：低于先上传主池库存；主池库存保底管备用池登录补入水位（已登录未上传的号放久了会死，建议设小值）：0=
             不从备用池自动补入，留空 = 沿用 codex2api 保底数量
           </p>
           <p className="text-xs text-muted-foreground">
-            远端限流（rate limit）重置时间距今超过阈值才移废弃池；短期限流（如 5h 窗口）保留主池等待自动恢复
+            限流（含 5h/7d/30d 窗口额度用完与瞬时 429）一律保留主池等待窗口重置，不自动废弃：账号余额还在，重置后照常可用；
+            缺额由补号机制用备用池补足
           </p>
           <label className="flex items-center gap-2 text-sm">
             <Switch checked={autoRepair} onCheckedChange={setAutoRepair} />
@@ -831,7 +825,7 @@ function MonitorSummaryChips({ summary }: { summary: Codex2ApiMonitorLog['summar
   const chips: { label: string; value: number | null | undefined; tone: Tone; hint: string }[] = [
     { label: '扫描', value: summary.scanned, tone: 'neutral', hint: '本轮跟踪的号数（主池/备用池中在远端监控分组内的 OAuth 号）' },
     { label: '异常', value: summary.error_accounts, tone: 'warn', hint: '状态量：远端 status=error 的号数（可能正在修复中）' },
-    { label: '限流中', value: summary.rate_limited, tone: 'warn', hint: '状态量：本轮观察到限流的号数；超过阈值会被废弃，同时计入「废弃」' },
+    { label: '限流中', value: summary.rate_limited, tone: 'warn', hint: '状态量：本轮观察到限流的号数（含 5h/7d/30d 窗口耗尽与瞬时 429），一律保留主池等窗口重置，不废弃' },
     { label: '待辅证', value: summary.ban_unconfirmed, tone: 'warn', hint: '状态量：疑似封禁但未获邮件辅证，保留观察' },
     { label: '在途修复', value: summary.repair_pending, tone: 'info', hint: '状态量：修复任务在途、还没回执的号数' },
     { label: '废弃', value: summary.discarded, tone: 'danger', hint: '动作量：本轮真正移入废弃池的号数' },

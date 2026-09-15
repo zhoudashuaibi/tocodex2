@@ -288,7 +288,6 @@ export function createCodex2apiModule({ engine, logger }) {
         'replenish_upload_order',
         'replenish_join_order',
         'pause_on_discard',
-        'rate_limit_reset_threshold_hours',
         'banned_patterns',
         'rate_limit_patterns',
       ]) {

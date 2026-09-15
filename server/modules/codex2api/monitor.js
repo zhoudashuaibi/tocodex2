@@ -2,7 +2,7 @@ import { sanitizeText } from '../../lib/sanitize.js';
 import { errors } from '../../lib/http-errors.js';
 import { uploadOrderExpr } from '../../lib/upload-order.js';
 import { buildAccountName } from '../../lib/codex2api-naming.js';
-import { replaceAccountCredentials } from './upload.js';
+import { applyUploadDefaults, balanceTierScoreBias, mergeUploadOptions, replaceAccountCredentials } from './upload.js';
 
 /**
  * codex2api 监控巡检（默认 5 分钟一轮）：
@@ -10,7 +10,8 @@ import { replaceAccountCredentials } from './upload.js';
  *  - 每轮同步远端状态：按 email/ID 回填 codex2api_account_id、镜像远端真实 status（主号池“远端状态”列）
  *  - 每轮可选刷新已上传号余额（refresh_balance 配置项，默认关）：走 balance 任务通道，选路优先 codex2api 绑定代理
  *  - 拉全量监控分组账号 → error/unauthorized 账号分类（banned/rate_limit/临时错误）
- *  - OAuth 号限流不写 status=error，用 rate_limited_at 判定：重置时间超过阈值 → 移废弃池，否则保留观察
+ *  - OAuth 号限流不写 status=error；限流态（rate_limited/usage_exhausted，含 5h/7d/30d
+ *    窗口耗尽与瞬时 429）一律保留观察不废弃：窗口重置后账号照常可用，余额还在
  *  - 401/会话过期 → 自动修复：有 refresh_token 先刷新（失败自动转完整登录），没有直接发完整登录；
  *    裸 unauthorized（上游 401 镜像，无封禁文本）同此路径；连续失败 max_repair_attempts 次暂停保留
  *    待重授（needs_reauth + 停自动修复 + 暂停远端调度，不再废弃）
@@ -90,7 +91,6 @@ export function createMonitor({ db, crypto, client, getConfig, pools, engine, up
       initial_balance_target: config.initial_balance_target ?? 0,
       replenish_upload_order: config.replenish_upload_order ?? 'balance_asc',
       replenish_join_order: config.replenish_join_order ?? 'balance_desc',
-      rate_limit_reset_threshold_hours: config.rate_limit_reset_threshold_hours ?? 12,
       // 设置页回显用：不回显会导致保存时把这些字段覆盖成空
       pause_on_discard: config.pause_on_discard !== false,
       banned_patterns: config.banned_patterns || [],
@@ -276,8 +276,6 @@ export function createMonitor({ db, crypto, client, getConfig, pools, engine, up
         .filter((p) => String(p).trim().toLowerCase() !== '401')
         .map((p) => new RegExp(p, 'i'));
       const rateLimitPatterns = (monitor.rate_limit_patterns || []).filter(Boolean).map((p) => new RegExp(p, 'i'));
-      const resetThresholdMs =
-        Math.max(0, Number(monitor.rate_limit_reset_threshold_hours ?? 12)) * 3600_000;
 
       // 全量拉取一次：限流态不写 status=error，按 status 过滤会漏掉
       accounts = await client.listAllAccounts();
@@ -321,35 +319,24 @@ export function createMonitor({ db, crypto, client, getConfig, pools, engine, up
       result.error_accounts = errorMonitored.length;
 
       for (const { remote, local, email } of tracked) {
-        // OAuth 号限流态：重置时间距今超过阈值 → 废弃；短期限流 → 保留观察
+        // OAuth 号限流态（rate_limited/usage_exhausted）：一律保留观察，绝不废弃。
+        // 5h/7d/30d 窗口额度用完只是暂时不可调度，窗口重置后账号照常可用（余额还在）；
+        // 瞬时 429 甚至没有窗口重置时间（未知）。补号口径已把限流号从可用数剔除，
+        // 缺额由备用池自然补足，不需要靠废弃腾位
         const rateLimit = client.accountRateLimit(remote);
         if (rateLimit.limited_now) {
           result.rate_limited += 1;
           const resetAt = rateLimit.rate_limit_reset_at;
           const resetMs = resetAt ? Date.parse(resetAt) - Date.now() : Number.NaN;
-          const resetDesc = resetAt
-            ? `${new Date(resetAt).toLocaleString('zh-CN', { hour12: false })}（约 ${formatDuration(resetMs)}）`
-            : '未知时间';
-          if (!Number.isFinite(resetMs) || resetMs > resetThresholdMs) {
-            await discardAndLog({
-              local,
-              email,
-              remote,
-              monitor,
-              reason: 'rate_limited_429',
-              detail: `限流至 ${resetDesc}`,
-              result,
-              items,
-            });
-          } else {
-            items.push({
-              email,
-              remote_id: remote?.id,
-              action: 'rate_limited_waiting',
-              reason: 'rate_limited_429',
-              detail: `限流中，${resetDesc} 后恢复（低于废弃阈值，保留主池）`,
-            });
-          }
+          items.push({
+            email,
+            remote_id: remote?.id,
+            action: 'rate_limited_waiting',
+            reason: 'rate_limited_429',
+            detail: Number.isFinite(resetMs)
+              ? `限流中，${new Date(resetAt).toLocaleString('zh-CN', { hour12: false })}（约 ${formatDuration(resetMs)}）后恢复（保留主池，不废弃）`
+              : '限流中，重置时间未知（瞬时 429 或远端未回填窗口，保留主池观察，不废弃）',
+          });
           continue;
         }
 
@@ -396,15 +383,14 @@ export function createMonitor({ db, crypto, client, getConfig, pools, engine, up
           continue;
         }
         if (rateLimitPatterns.some((re) => re.test(errorMessage))) {
-          await discardAndLog({
-            local,
+          // 限流类错误文本同样不废弃：窗口限流是暂时的，余额还在、重置后照常可用；
+          // 也不发修复——限流不是凭据问题，重登只会白白重建远端实体
+          items.push({
             email,
-            remote,
-            monitor,
+            remote_id: remote?.id,
+            action: 'rate_limited_waiting',
             reason: 'rate_limited_429',
-            detail: errorMessage,
-            result,
-            items,
+            detail: `${errorMessage}｜限流类错误，保留主池观察（不废弃、不发修复）`,
           });
           continue;
         }
@@ -984,6 +970,9 @@ export function createMonitor({ db, crypto, client, getConfig, pools, engine, up
    * codex2api 没有更新凭据的接口，且重登后 RT 已轮换、其 RT 原文查重拦不住新 RT，
    * 只能换实体：快照旧号（原名/代理/分组）→ 用新 RT 建新号 → 删旧号（见
    * upload.js replaceAccountCredentials，先建后删，失败不丢号）→ 回填新关联。
+   * 新实体随后补写调度配置（applyUploadDefaults）：创建接口只收名字/凭据/代理/分组，
+   * 不补写的话重授换实体会丢「禁用 5h/7d 自动暂停」等上传默认配置。旧实体上有
+   * 显式覆盖值（指纹/并发/偏置/禁用自动暂停）优先沿用，与沿用原名/代理/分组同一契约。
    */
   async function pushRepairedCredentials(accountId) {
     const config = getConfig();
@@ -1011,6 +1000,21 @@ export function createMonitor({ db, crypto, client, getConfig, pools, engine, up
       sessionToken: tokens.session_token || null,
       skipRefresh: true,
       email: row.email,
+      logger,
+    });
+    // 新实体补写调度配置：上传默认为底，旧实体有显式覆盖值时沿用（快照可能取不到
+    // 全部字段，取不到就按上传默认走，行为与一次全新上传一致）
+    const uploadDefaults = mergeUploadOptions({ ...config.upload_defaults, group_ids: config.group_ids ?? [] });
+    if (remote.codex_fingerprint_mode) uploadDefaults.codex_fingerprint_mode = remote.codex_fingerprint_mode;
+    const oldConcurrency = Number(remote.base_concurrency_override);
+    if (Number.isFinite(oldConcurrency) && oldConcurrency > 0) uploadDefaults.base_concurrency = oldConcurrency;
+    if (remote.auto_pause_5h_disabled === true) uploadDefaults.disable_auto_pause_5h = true;
+    if (remote.auto_pause_7d_disabled === true) uploadDefaults.disable_auto_pause_7d = true;
+    const oldBias = Number(remote.score_bias_override);
+    await applyUploadDefaults(client, replacement.remoteId, uploadDefaults, {
+      scoreBias: Number.isFinite(oldBias)
+        ? oldBias
+        : config.upload_defaults?.score_bias ?? balanceTierScoreBias(row.balance),
       logger,
     });
     db.prepare('UPDATE accounts SET codex2api_account_id=?, updated_at=? WHERE id=?').run(

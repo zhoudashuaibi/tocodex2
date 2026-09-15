@@ -304,7 +304,6 @@ export interface Codex2ApiMonitorConfig {
   /** 自动补号挑号顺序：备用池登录补入（默认 balance_desc 金额大优先） */
   replenish_join_order?: UploadOrder;
   pause_on_discard?: boolean;
-  rate_limit_reset_threshold_hours?: number;
   banned_patterns: string[];
   rate_limit_patterns: string[];
 }

@@ -227,36 +227,14 @@ export function createUploader({ db, crypto, client, getConfig, settingsGet, dat
   }
 
   /**
-   * 创建后补写 codex2api 创建接口不收的账号配置（全部 best-effort：补写失败不算上传失败，
-   * 指纹/并发档位可在 codex2api 管理页手动改）：
-   *   codex_fingerprint_mode / base_concurrency_override / score_bias_override /
-   *   auto_pause_5h_disabled / auto_pause_7d_disabled → scheduler PATCH
-   *   model_whitelist → PATCH /accounts/:id/models
+   * 创建后补写 codex2api 创建接口不收的账号配置：委托共享的 applyUploadDefaults
+   * （见该函数注释），调度偏置取本号构建载荷时的分档值。
    */
   async function applyAccountConfig(remoteId, item, options) {
-    const patch = {};
-    const fingerprintMode = normalizeCodexFingerprintMode(options.codex_fingerprint_mode);
-    if (fingerprintMode !== 'off') patch.codex_fingerprint_mode = fingerprintMode;
-    const concurrency = Number(options.base_concurrency);
-    if (Number.isFinite(concurrency) && concurrency > 0) patch.base_concurrency_override = Math.floor(concurrency);
-    const scoreBias = Number(item.payload.score_bias);
-    if (Number.isFinite(scoreBias) && scoreBias !== 0) patch.score_bias_override = Math.max(-200, Math.min(200, Math.floor(scoreBias)));
-    if (options.disable_auto_pause_5h) patch.auto_pause_5h_disabled = true;
-    if (options.disable_auto_pause_7d) patch.auto_pause_7d_disabled = true;
-    if (Object.keys(patch).length) {
-      try {
-        await client.updateScheduler(remoteId, patch);
-      } catch (error) {
-        logger?.warn?.({ remoteId, err: error.message }, 'apply account config after upload failed');
-      }
-    }
-    if (options.model_whitelist?.length) {
-      try {
-        await client.setAccountModels(remoteId, options.model_whitelist);
-      } catch (error) {
-        logger?.warn?.({ remoteId, err: error.message }, 'apply model whitelist after upload failed');
-      }
-    }
+    await applyUploadDefaults(client, remoteId, options, {
+      scoreBias: item.payload?.score_bias ?? null,
+      logger,
+    });
   }
 
   function buildPayload(target, options, proxySelection) {
@@ -348,6 +326,42 @@ export function createUploader({ db, crypto, client, getConfig, settingsGet, dat
   }
 
   return { uploadAccounts };
+}
+
+/**
+ * 给远端账号补写上传默认配置（scheduler PATCH + 模型白名单，全部 best-effort：
+ * 补写失败不算上传失败，档位可在 codex2api 管理页手动改）。上传（新建/复活/替换）
+ * 与巡检修复回推（pushRepairedCredentials 换实体后）共用——codex2api 创建接口不收
+ * 这些字段，新实体只带名字/凭据/代理/分组，漏补就会出现「上传默认开了禁用 5h/7d
+ * 自动暂停、号上去却是关的」：
+ *   codex_fingerprint_mode / base_concurrency_override / score_bias_override /
+ *   auto_pause_5h_disabled / auto_pause_7d_disabled → scheduler PATCH
+ *   model_whitelist → PATCH /accounts/:id/models
+ */
+export async function applyUploadDefaults(client, remoteId, options, { scoreBias = null, logger = null } = {}) {
+  const patch = {};
+  const fingerprintMode = normalizeCodexFingerprintMode(options.codex_fingerprint_mode);
+  if (fingerprintMode !== 'off') patch.codex_fingerprint_mode = fingerprintMode;
+  const concurrency = Number(options.base_concurrency);
+  if (Number.isFinite(concurrency) && concurrency > 0) patch.base_concurrency_override = Math.floor(concurrency);
+  const bias = scoreBias == null ? Number.NaN : Number(scoreBias);
+  if (Number.isFinite(bias) && bias !== 0) patch.score_bias_override = Math.max(-200, Math.min(200, Math.floor(bias)));
+  if (options.disable_auto_pause_5h) patch.auto_pause_5h_disabled = true;
+  if (options.disable_auto_pause_7d) patch.auto_pause_7d_disabled = true;
+  if (Object.keys(patch).length) {
+    try {
+      await client.updateScheduler(remoteId, patch);
+    } catch (error) {
+      logger?.warn?.({ remoteId, err: error.message }, 'apply account config after upload failed');
+    }
+  }
+  if (options.model_whitelist?.length) {
+    try {
+      await client.setAccountModels(remoteId, options.model_whitelist);
+    } catch (error) {
+      logger?.warn?.({ remoteId, err: error.message }, 'apply model whitelist after upload failed');
+    }
+  }
 }
 
 /**

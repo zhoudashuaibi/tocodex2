@@ -18,7 +18,7 @@ function setup() {
   const db = openDatabase(dataDir, { logger });
   const crypto = createCrypto({ dataDir, secretKeyEnv: 'test-secret', logger });
   const pools = createPools(db, crypto);
-  return { dataDir, db, crypto, pools, submitted: [], uploads: [], schedulable: [], banChecks: [], banResults: [] };
+  return { dataDir, db, crypto, pools, submitted: [], uploads: [], schedulable: [], banChecks: [], banResults: [], schedulerPatches: [], createdRemote: [], deletedRemote: [], nextRemoteId: 900 };
 }
 
 function insertAccount(db, crypto, { email, pool = 'main', status = 'active', tokens = null, credentials = null, balance = null, initialBalance = null }) {
@@ -99,6 +99,20 @@ function buildMonitor({
     },
     setEnabled: async (id, enabled) => {
       ctx.schedulable.push({ id, enabled });
+    },
+    getAccount: async (id) => remoteAccounts.find((account) => Number(account.id) === Number(id)) ?? null,
+    findAccountByEmail: async (email) =>
+      remoteAccounts.find((account) => String(account?.email || '').toLowerCase() === String(email).toLowerCase()) ?? null,
+    createAccount: async (payload) => {
+      ctx.createdRemote.push(payload);
+      ctx.nextRemoteId += 1;
+      return { success: 1, updated: 0, duplicate: 0, failed: 0, created_ids: [ctx.nextRemoteId] };
+    },
+    deleteAccount: async (id) => {
+      ctx.deletedRemote.push(Number(id));
+    },
+    updateScheduler: async (id, patch) => {
+      ctx.schedulerPatches.push({ id: Number(id), patch });
     },
   };
   const getConfig = () => ({
@@ -425,6 +439,62 @@ test('主池重授成功：状态回 active 并解锁自动修复（清连败计
   assert.equal(account.status, 'active');
   assert.equal(account.auto_repair_blocked, 0);
   assert.equal(account.repair_fail_count, 0);
+});
+
+test('修复回推换实体后补写调度配置：禁用 5h/7d 自动暂停等上传默认不再丢失', async () => {
+  const id = insertAccount(ctx.db, ctx.crypto, { email: 'fix@test.local', tokens: { refresh_token: 'rt-new' }, balance: 25 });
+  ctx.db.prepare(`UPDATE accounts SET codex2api_account_id=31 WHERE id=?`).run(id);
+  const monitor = buildMonitor({
+    uploadDefaults: { disable_auto_pause_5h: true, disable_auto_pause_7d: true, codex_fingerprint_mode: 'session' },
+    remoteAccounts: [remoteAccount({ id: 31, email: 'fix@test.local' })],
+  });
+
+  const ok = await monitor.pushRepairedCredentials(id);
+
+  assert.equal(ok, true);
+  // 新实体（901）建好、旧实体（31）删除、本地关联回填
+  assert.equal(ctx.db.prepare('SELECT codex2api_account_id FROM accounts WHERE id=?').get(id).codex2api_account_id, 901);
+  assert.deepEqual(ctx.deletedRemote, [31]);
+  // 关键断言：新实体收到 scheduler PATCH，上传默认里的禁用自动暂停/指纹档位全部补上
+  assert.deepEqual(ctx.schedulerPatches, [
+    {
+      id: 901,
+      patch: {
+        codex_fingerprint_mode: 'session',
+        auto_pause_5h_disabled: true,
+        auto_pause_7d_disabled: true,
+        score_bias_override: 30, // 上传默认未配置偏置 → 按余额分档（25 刀 → +30）
+      },
+    },
+  ]);
+});
+
+test('修复回推：旧实体有显式覆盖值时优先沿用，不回退上传默认', async () => {
+  const id = insertAccount(ctx.db, ctx.crypto, { email: 'keep@test.local', tokens: { refresh_token: 'rt2' }, balance: 5 });
+  ctx.db.prepare(`UPDATE accounts SET codex2api_account_id=32 WHERE id=?`).run(id);
+  const monitor = buildMonitor({
+    uploadDefaults: { base_concurrency: 3 },
+    remoteAccounts: [
+      {
+        id: 32,
+        status: 'error',
+        name: 'oauth::keep@test.local::5',
+        email: 'keep@test.local',
+        error_message: null,
+        base_concurrency_override: 7,
+        score_bias_override: 120,
+        auto_pause_5h_disabled: true,
+      },
+    ],
+  });
+
+  const ok = await monitor.pushRepairedCredentials(id);
+
+  assert.equal(ok, true);
+  const patch = ctx.schedulerPatches[0].patch;
+  assert.equal(patch.base_concurrency_override, 7, '旧实体显式并发覆盖优先于上传默认');
+  assert.equal(patch.score_bias_override, 120, '旧实体显式偏置覆盖优先于余额分档');
+  assert.equal(patch.auto_pause_5h_disabled, true, '旧实体已禁用的自动暂停沿用');
 });
 
 test('补号计数：他人上传的号（本地无记录）不计入', async () => {
@@ -1076,18 +1146,40 @@ test('修复回执计数：上一轮之后落地的成败进入本轮动作量',
 // ---- 废弃计数求真 ----
 
 test('废弃失败不再谎报「已废弃」：状态冲突单独记 discard_failed', async () => {
-  insertAccount(ctx.db, ctx.crypto, {
-    email: 'limited@test.local',
-    tokens: { refresh_token: 'rt' },
-  });
+  insertAccount(ctx.db, ctx.crypto, { email: 'banned@test.local', tokens: { refresh_token: 'rt' } });
   const monitor = buildMonitor({
     failDiscard: true,
+    bannedPatterns: ['banned'],
+    banMailCheck: {
+      check: async () => ({ confirmed: true, result: 'confirmed', reason: '封禁邮件命中' }),
+    },
+    remoteAccounts: [
+      remoteAccount({ id: 1, email: 'banned@test.local', status: 'error', errorMessage: 'account is banned' }),
+    ],
+  });
+
+  const view = await monitor.runCheck();
+
+  assert.equal(view.last_result.discarded, 0);
+  assert.equal(view.last_result.discard_failed, 1);
+  const [item] = monitor.recentLogs(1)[0].items;
+  assert.equal(item.action, 'discard_failed');
+  assert.match(item.detail, /废弃失败/);
+  const account = ctx.db.prepare(`SELECT pool FROM accounts WHERE email='banned@test.local'`).get();
+  assert.equal(account.pool, 'main');
+});
+
+// ---- 限流永不废弃（窗口额度用完 ≠ 号死了，重置后照常可用） ----
+
+test('限流永不废弃：重置时间已知且很远（如 7d 窗口耗尽）也保留主池等待恢复', async () => {
+  insertAccount(ctx.db, ctx.crypto, { email: 'weekly@test.local', tokens: { refresh_token: 'rt' } });
+  const monitor = buildMonitor({
     remoteAccounts: [
       remoteAccount({
-        id: 1,
-        email: 'limited@test.local',
+        id: 5,
+        email: 'weekly@test.local',
         rateLimitedAt: new Date().toISOString(),
-        resetAt: new Date(Date.now() + 30 * 24 * 3600_000).toISOString(),
+        resetAt: new Date(Date.now() + 7 * 24 * 3600_000).toISOString(),
       }),
     ],
   });
@@ -1096,11 +1188,50 @@ test('废弃失败不再谎报「已废弃」：状态冲突单独记 discard_fa
 
   assert.equal(view.last_result.rate_limited, 1);
   assert.equal(view.last_result.discarded, 0);
-  assert.equal(view.last_result.discard_failed, 1);
+  const account = ctx.db.prepare(`SELECT pool FROM accounts WHERE email='weekly@test.local'`).get();
+  assert.equal(account.pool, 'main');
   const [item] = monitor.recentLogs(1)[0].items;
-  assert.equal(item.action, 'discard_failed');
-  assert.match(item.detail, /废弃失败/);
-  const account = ctx.db.prepare(`SELECT pool FROM accounts WHERE email='limited@test.local'`).get();
+  assert.equal(item.action, 'rate_limited_waiting');
+  assert.match(item.detail, /后恢复（保留主池，不废弃）/);
+});
+
+test('限流且重置时间未知（瞬时 429 无窗口信息）：保留观察，不再「限流至未知时间」直接废弃', async () => {
+  insertAccount(ctx.db, ctx.crypto, { email: 'unknown-reset@test.local', tokens: { refresh_token: 'rt' } });
+  const monitor = buildMonitor({
+    remoteAccounts: [
+      remoteAccount({ id: 6, email: 'unknown-reset@test.local', rateLimitedAt: new Date().toISOString() }),
+    ],
+  });
+
+  const view = await monitor.runCheck();
+
+  assert.equal(view.last_result.rate_limited, 1);
+  assert.equal(view.last_result.discarded, 0);
+  const account = ctx.db.prepare(`SELECT pool FROM accounts WHERE email='unknown-reset@test.local'`).get();
+  assert.equal(account.pool, 'main');
+  const [item] = monitor.recentLogs(1)[0].items;
+  assert.equal(item.action, 'rate_limited_waiting');
+  assert.match(item.detail, /重置时间未知/);
+});
+
+test('限流类错误文本（status=error + 429）：不废弃也不发修复，保留观察', async () => {
+  insertAccount(ctx.db, ctx.crypto, { email: 'burst@test.local', tokens: { refresh_token: 'rt' } });
+  const monitor = buildMonitor({
+    autoRepair: true,
+    remoteAccounts: [
+      remoteAccount({ id: 7, email: 'burst@test.local', status: 'error', errorMessage: 'HTTP 429 too many requests' }),
+    ],
+  });
+
+  const view = await monitor.runCheck();
+
+  assert.equal(view.last_result.discarded, 0);
+  assert.equal(view.last_result.repairing, 0, '限流不是凭据问题，不发修复任务');
+  assert.equal(ctx.submitted.filter((job) => job.type !== 'balance').length, 0);
+  const [item] = monitor.recentLogs(1)[0].items;
+  assert.equal(item.action, 'rate_limited_waiting');
+  assert.match(item.detail, /不废弃、不发修复/);
+  const account = ctx.db.prepare(`SELECT pool FROM accounts WHERE email='burst@test.local'`).get();
   assert.equal(account.pool, 'main');
 });
 
