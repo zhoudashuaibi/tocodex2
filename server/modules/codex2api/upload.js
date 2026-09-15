@@ -1,11 +1,12 @@
 import { errors } from '../../lib/http-errors.js';
+import { ACCOUNT_NAME_SEPARATOR, BALANCE_SUFFIX_RE, buildAccountName, sanitizeAccountName } from '../../lib/codex2api-naming.js';
 
 /**
  * codex2api 上传管线：查重索引 → 新增/替换分流 → 最少绑定代理分配 → 余额后缀 → 回填。
  *
  * 与 sub2api 版的语义差异：
  *  - 创建载荷只带 refresh_token（codex2api 契约）；邮箱/AT 由其后台刷新回填，
- *    查重索引靠 name 里的 oauth---<email> 命名约定兜底（见 client.accountEmail）
+ *    查重索引靠 name 里的 oauth::<email> 命名约定兜底（见 client.accountEmail）
  *  - skip_refresh 默认开：批量上传时不让 codex2api 立刻拉起无上限上游刷新
  *  - 指纹收敛 / 基础并发 / 调度偏置 / 自动暂停开关在创建后经 scheduler PATCH 补写
  *    （codex2api 创建接口不收这些字段；新账号指纹档位取其系统默认）
@@ -277,7 +278,7 @@ export function createUploader({ db, crypto, client, getConfig, settingsGet, dat
       }
     }
     return {
-      name: `oauth---${target.email || target.row.email || 'account'}`,
+      name: buildAccountName(target.email || target.row.email),
       refresh_token: target.tokens.refresh_token,
       ...(target.tokens.session_token ? { session_token: target.tokens.session_token } : {}),
       ...(proxyUrl ? { proxy_url: proxyUrl } : {}),
@@ -292,7 +293,7 @@ export function createUploader({ db, crypto, client, getConfig, settingsGet, dat
 
   async function appendBalanceSuffix(item, options, db, crypto) {
     const payload = item.payload;
-    if (/---\d+$/.test(String(payload.name || ''))) return;
+    if (BALANCE_SUFFIX_RE.test(String(payload.name || ''))) return;
     const row = db.prepare('SELECT balance, balance_checked_at, tokens_enc FROM accounts WHERE id = ?').get(item.row.id);
     if (!row) return;
     let balance = row.balance;
@@ -329,7 +330,7 @@ export function createUploader({ db, crypto, client, getConfig, settingsGet, dat
     }
     const usd = Math.round(Number(balance));
     if (Number.isFinite(usd)) {
-      payload.name = `${payload.name}---${usd}`;
+      payload.name = sanitizeAccountName(`${payload.name}${ACCOUNT_NAME_SEPARATOR}${usd}`);
       // 实时补查到余额后同步校正分档偏置（buildPayload 构建时余额还是空）
       if (options.score_bias == null) payload.score_bias = balanceTierScoreBias(usd);
     }
@@ -359,7 +360,8 @@ export function createUploader({ db, crypto, client, getConfig, settingsGet, dat
  */
 export async function replaceAccountCredentials(client, { remoteId, name, proxyUrl, groupIds, refreshToken, sessionToken = null, skipRefresh = true, logger = null }) {
   const payload = {
-    name: name || 'oauth---account',
+    // 远端历史遗留的 oauth--- 名字必须先归一：codex2api 现在拒绝含 `--` 的名称
+    name: sanitizeAccountName(name) || 'oauth::account',
     refresh_token: refreshToken,
     ...(sessionToken ? { session_token: sessionToken } : {}),
     ...(proxyUrl ? { proxy_url: proxyUrl } : {}),
@@ -389,7 +391,7 @@ export function buildExportFromTokens(row, tokens) {
     proxies: [],
     accounts: [
       {
-        name: `oauth---${tokens.email || row.email}`,
+        name: buildAccountName(tokens.email || row.email),
         type: 'oauth',
         credentials: {
           access_token: tokens.access_token,

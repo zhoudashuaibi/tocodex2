@@ -584,7 +584,7 @@ export function Codex2ApiPage() {
         <CardHeader>
           <CardTitle>巡检日志</CardTitle>
           <CardDescription>
-            仅监控本系统上传的 OAuth 授权号（oauth---邮箱 命名的 free 号），API Key 账号与非本系统账号忽略 ·
+            仅监控本系统上传的 OAuth 授权号（oauth::邮箱 命名的 free 号），API Key 账号与非本系统账号忽略 ·
             最近巡检记录与每个账号的处理动作（服务端保留最近 100 轮）
           </CardDescription>
         </CardHeader>

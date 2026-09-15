@@ -1,6 +1,7 @@
 import { sanitizeText } from '../../lib/sanitize.js';
 import { errors } from '../../lib/http-errors.js';
 import { uploadOrderExpr } from '../../lib/upload-order.js';
+import { buildAccountName } from '../../lib/codex2api-naming.js';
 import { replaceAccountCredentials } from './upload.js';
 
 /**
@@ -999,7 +1000,7 @@ export function createMonitor({ db, crypto, client, getConfig, pools, engine, up
     if (!remote || !Number.isSafeInteger(Number(remote.id))) return false;
     const replacement = await replaceAccountCredentials(client, {
       remoteId: Number(remote.id),
-      name: remote.name || `oauth---${row.email}`,
+      name: remote.name || buildAccountName(row.email),
       proxyUrl: remote.proxy_url || null,
       groupIds: Array.isArray(remote.group_ids) ? remote.group_ids : null,
       refreshToken: tokens.refresh_token,

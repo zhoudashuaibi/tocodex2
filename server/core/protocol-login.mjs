@@ -6,6 +6,7 @@ import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { fetchSentinelToken } from "./sentinel.mjs";
 import { fetchTotpCodeFromPickupUrl, msUntilNextTotpWindow } from "../lib/totp-pickup.js";
+import { buildAccountName as buildCodex2apiAccountName } from "../lib/codex2api-naming.js";
 import {
   browserIdentityForTlsProfile,
   shouldUseTlsTransport,
@@ -2099,7 +2100,8 @@ function decodeJwtPayload(jwt) {
 }
 
 function buildAccountName(email) {
-  return email ? `oauth---${email}` : `oauth---${new Date().toISOString()}`;
+  // oauth::<email>：`---` 分隔符被 codex2api 的注入过滤（-- 特征）拒绝，见 lib/codex2api-naming.js
+  return buildCodex2apiAccountName(email || new Date().toISOString());
 }
 
 function pickWorkspaceId(payload) {
@@ -2488,7 +2490,7 @@ Options:
   --refresh-codex2api <file>        Refresh an existing codex2api OAuth file without email login.
   --checkpoint <file>             Save resumable login state after email verification.
   --resume-checkpoint <file>      Resume a saved login state before requesting a new email code.
-  --codex2api-name <name>           Account name in codex2api. Default: oauth---<email>
+  --codex2api-name <name>           Account name in codex2api. Default: oauth::<email>
   --concurrency <number>          codex2api concurrency. Default: 10
   --priority <number>             codex2api priority. Default: 1
   --rate-multiplier <number>      codex2api rate_multiplier. Default: 1

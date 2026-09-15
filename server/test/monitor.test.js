@@ -61,7 +61,7 @@ function remoteAccount({ id, email, status = 'active', rateLimitedAt = null, res
   return {
     id,
     status,
-    name: name || `oauth---${email}`,
+    name: name || `oauth::${email}`,
     email,
     // codex2api 限流语义：status=rate_limited/usage_exhausted + reset_5h_at/reset_7d_at；
     // 测试里 rateLimitedAt 非空即视为限流态，resetAt 对应窗口重置时间

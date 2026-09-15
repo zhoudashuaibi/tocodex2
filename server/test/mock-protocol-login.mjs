@@ -68,7 +68,7 @@ async function main() {
         proxies: [],
         accounts: [
           {
-            name: 'oauth---mock@test.local',
+            name: 'oauth::mock@test.local',
             platform: 'openai',
             type: 'oauth',
             credentials: {

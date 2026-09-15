@@ -28,7 +28,7 @@ function setup() {
     accountEmail: (account) => account?.email || null,
     createAccount: async (payload) => {
       created.push(payload);
-      const email = String(payload.name || '').replace(/^oauth---/, '').split('---')[0];
+      const email = String(payload.name || '').replace(/^oauth::/, '').split('::')[0];
       const account = { id: nextRemoteId, email, name: payload.name, status: 'active', ...(payload.proxy_url ? { proxy_url: payload.proxy_url } : {}) };
       remote.set(email, account);
       nextRemoteId += 1;
@@ -86,7 +86,7 @@ function insertAccount(db, crypto, { email, balance = null }) {
 function payloadByEmail() {
   const map = new Map();
   for (const payload of ctx.created) {
-    const email = String(payload.name || '').replace(/^oauth---/, '').split('---')[0];
+    const email = String(payload.name || '').replace(/^oauth::/, '').split('::')[0];
     map.set(email, payload);
   }
   return map;
@@ -109,7 +109,7 @@ beforeEach(() => {
 test('balanceTierScoreBias：四档边界与未知余额默认档', () => {
   assert.equal(balanceTierScoreBias(0), 40);
   assert.equal(balanceTierScoreBias(9.4), 40);
-  assert.equal(balanceTierScoreBias(9.6), 40); // 四舍五入到 10，与 ---N 名称后缀同口径
+  assert.equal(balanceTierScoreBias(9.6), 40); // 四舍五入到 10，与 ::N 名称后缀同口径
   assert.equal(balanceTierScoreBias(10), 40);
   assert.equal(balanceTierScoreBias(10.6), 20);
   assert.equal(balanceTierScoreBias(15), 20);
@@ -124,10 +124,10 @@ test('balanceTierScoreBias：四档边界与未知余额默认档', () => {
 
 test('上传默认按余额分档补写调度偏置，并追加余额后缀', async () => {
   const cases = [
-    { email: 'small@test.local', balance: 5.4, bias: 40, suffix: '---5' },
-    { email: 'mid@test.local', balance: 15, bias: 20, suffix: '---15' },
-    { email: 'mid-high@test.local', balance: 25, bias: 30, suffix: '---25' },
-    { email: 'big@test.local', balance: 40, bias: 10, suffix: '---40' },
+    { email: 'small@test.local', balance: 5.4, bias: 40, suffix: '::5' },
+    { email: 'mid@test.local', balance: 15, bias: 20, suffix: '::15' },
+    { email: 'mid-high@test.local', balance: 25, bias: 30, suffix: '::25' },
+    { email: 'big@test.local', balance: 40, bias: 10, suffix: '::40' },
     { email: 'unknown@test.local', balance: null, bias: 20, suffix: null },
   ];
   const ids = cases.map((c) => insertAccount(ctx.db, ctx.crypto, c));
@@ -138,13 +138,15 @@ test('上传默认按余额分档补写调度偏置，并追加余额后缀', as
   for (const c of cases) {
     const payload = byEmail.get(c.email);
     assert.ok(payload, `missing payload for ${c.email}`);
+    // 名称必须能过 codex2api 的注入过滤（--/;/|/* 等特征一律 400）
+    assert.doesNotMatch(String(payload.name), /--|;|\||\/\*|\*\//, `${c.email} name 含注入特征`);
     // RT-only 载荷：只带 refresh_token，不带 AT/凭据对象
     assert.ok(payload.refresh_token, `${c.email} refresh_token`);
     assert.equal('access_token' in payload, false, `${c.email} 不应携带 access_token`);
     // skip_refresh 默认开（防批量上传打爆上游刷新）
     assert.equal(payload.skip_refresh, true);
     if (c.suffix) assert.ok(String(payload.name).endsWith(c.suffix), `${c.email} name suffix`);
-    else assert.equal(String(payload.name), `oauth---${c.email}`);
+    else assert.equal(String(payload.name), `oauth::${c.email}`);
     // 余额分档的调度偏置经创建后 scheduler PATCH 补写
     const patch = ctx.schedulerPatches.find((entry) => entry.id === ctx.remote.get(c.email).id);
     assert.ok(patch, `${c.email} scheduler patch`);
@@ -207,6 +209,9 @@ test('创建前二次校验：快照之后远端已出现的号降级为替换�
     ctx.db.prepare('SELECT codex2api_account_id FROM accounts WHERE id=?').get(id).codex2api_account_id,
     777,
   );
+  // 远端历史遗留的 oauth--- 名字在替换建新时归一为 :: 分隔（codex2api 拒绝 -- 特征）
+  const replacementPayload = ctx.created.find((entry) => entry.name.includes('stale@test.local'));
+  assert.equal(replacementPayload?.name, 'oauth::stale@test.local::20', '替换建新应沿用归一后的原名与余额后缀');
 });
 
 test('同一批次内重复的账号 id 去重：不会在远端建出两份', async () => {
@@ -262,7 +267,7 @@ test('主号池预估余额：名称后缀回退、邮箱匹配和负数归零',
 test('主号池预估余额：本地初始化余额优先于远端名称后缀', () => {
   const result = buildMainBalanceEstimate(
     [{ id: 1, email: 'a@test.local', initial_balance: 5, codex2api_account_id: 7 }],
-    [{ id: 7, name: 'oauth---a@test.local---20', email: 'a@test.local', total_account_billed: 1 }],
+    [{ id: 7, name: 'oauth::a@test.local::20', email: 'a@test.local', total_account_billed: 1 }],
     estimateOptions(),
   );
   assert.equal(result.items[0].initial_balance, 5);
@@ -273,7 +278,7 @@ test('主号池预估余额：本地初始化余额优先于远端名称后缀',
 test('主号池预估余额：非末尾整数后缀不作为初始化余额', () => {
   const result = buildMainBalanceEstimate(
     [{ id: 1, email: 'a@test.local', initial_balance: null, codex2api_account_id: 7 }],
-    [{ id: 7, name: 'oauth---a@test.local---20-extra', email: 'a@test.local', total_account_billed: 1 }],
+    [{ id: 7, name: 'oauth::a@test.local::20-extra', email: 'a@test.local', total_account_billed: 1 }],
     estimateOptions(),
   );
   assert.equal(result.unknown_count, 1);

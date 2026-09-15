@@ -6,6 +6,7 @@ import { createPools } from './pools.js';
 import { parseImportLines, parseTwofaLines, parsePasswordFileText, parseTocodex2Export, parseCodex2apiAccountsExport, credentialsForImport } from './import.js';
 import { buildTocodex2ExportPayload, tocodex2ExportFilename } from './export.js';
 import { buildExportFromTokens } from '../codex2api/upload.js';
+import { balanceFromAccountName as initialBalanceFromCodex2apiName } from '../../lib/codex2api-naming.js';
 import { createMailInit } from './mail-init.js';
 import { createBanMailCheck } from './ban-mail-check.js';
 import { sanitizeText } from '../../lib/sanitize.js';
@@ -32,13 +33,6 @@ function isDiscardUsageStale(at) {
   const ms = Date.parse(at);
   if (!Number.isFinite(ms)) return true;
   return Date.now() - ms > DISCARD_USAGE_STALE_MS;
-}
-
-function initialBalanceFromCodex2apiName(name) {
-  const match = String(name || '').match(/---(\d+)$/);
-  if (!match) return null;
-  const balance = Number(match[1]);
-  return Number.isSafeInteger(balance) && balance >= 0 ? balance : null;
 }
 
 function finiteNonNegativeAmount(value) {

@@ -281,13 +281,17 @@ export function createCodex2apiClient(getConfig) {
    *
    * 兜底是必须的：上传侧默认 skip_refresh=true（防批量导入把上游刷新打爆），
    * 此时 codex2api 解不出邮箱（RT 不是 JWT），credentials.email 要等它的后台
-   * 刷新调度器跑过才会回填。我们上传时的命名约定 oauth---<email>---N 保证
+   * 刷新调度器跑过才会回填。我们上传时的命名约定 oauth::<email>::N 保证
    * name 兜底在窗口期内依然能建 email 索引。
    */
   function accountEmail(account) {
     const direct = String(account?.email || '').trim().toLowerCase();
     if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(direct)) return direct;
-    const match = String(account?.name || '').toLowerCase().match(/[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
+    // 先剥掉本系统命名前缀（新 oauth:: 与历史遗留 oauth---）：前缀字符都在
+    // 邮箱本地部分字符类里，不剥会被一并吞进提取结果（旧名 oauth---a@b.c
+    // 曾被整串当成"邮箱"导致查重索引失配）
+    const stripped = String(account?.name || '').replace(/^oauth(-{2,}|:{1,})/i, '');
+    const match = stripped.toLowerCase().match(/[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
     return match ? match[0] : null;
   }
 
